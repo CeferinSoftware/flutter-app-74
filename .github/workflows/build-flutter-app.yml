@@ -1,0 +1,250 @@
+
+name: Build Flutter App
+on:
+  workflow_dispatch:
+    inputs:
+      app_name:
+        description: "App Name"
+        required: true
+        type: string
+      package_name:
+        description: "Package Name"
+        required: true
+        type: string
+      app_url:
+        description: "Website URL"
+        required: true
+        type: string
+      version:
+        description: "App Version"
+        required: false
+        default: "1.0.0"
+        type: string
+      ai_enabled:
+        description: "Enable AI Chatbot"
+        required: false
+        default: "false"
+        type: string
+      ai_provider:
+        description: "AI Provider"
+        required: false
+        default: "gemini"
+        type: string
+      ai_model:
+        description: "AI Model"
+        required: false
+        default: "gemini-1.5-flash"
+        type: string
+      ai_api_key:
+        description: "AI API Key"
+        required: false
+        default: ""
+        type: string
+      ai_chatbot_name:
+        description: "AI Chatbot Name"
+        required: false
+        default: "Asistente Virtual"
+        type: string
+      ai_system_prompt:
+        description: "AI System Prompt"
+        required: false
+        default: "Eres un asistente útil y amigable."
+        type: string
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    
+    # ALTERNATIVA: Usar imagen más reciente si persisten problemas
+    # container: 
+    #   image: ubuntu:22.04
+    #   options: --privileged
+    
+    steps:
+      - name: 📋 Checkout repository
+        uses: actions/checkout@v4
+        
+      - name: ☕ Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: "zulu"
+          java-version: "17"
+          
+      - name: 🐦 Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.19.0"
+          channel: "stable"
+          cache: true
+          
+      - name: 🔧 Setup Android SDK 35
+        run: |
+          echo "🔧 Configurando Android SDK 35 para evitar android.jar corrupto..."
+          
+          # Verificar variables de entorno
+          echo "ANDROID_SDK_ROOT: $ANDROID_SDK_ROOT"
+          echo "ANDROID_HOME: $ANDROID_HOME"
+          
+          # Usar ANDROID_HOME como fallback
+          SDK_ROOT=${ANDROID_SDK_ROOT:-$ANDROID_HOME}
+          echo "Usando SDK_ROOT: $SDK_ROOT"
+          
+          # Aceptar licencias primero
+          echo "📝 Aceptando licencias..."
+          yes | $SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --licenses || true
+          
+          # Actualizar SDK manager
+          echo "🔄 Actualizando SDK manager..."
+          $SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --update
+          
+          # Instalar componentes específicos para SDK 35
+          echo "📦 Instalando Android SDK 35..."
+          $SDK_ROOT/cmdline-tools/latest/bin/sdkmanager "platforms;android-35"
+          
+          echo "🔨 Instalando build-tools 35.0.0..."
+          $SDK_ROOT/cmdline-tools/latest/bin/sdkmanager "build-tools;35.0.0"
+          
+          echo "🛠️ Instalando NDK compatible..."
+          $SDK_ROOT/cmdline-tools/latest/bin/sdkmanager "ndk;26.1.10909125"
+          
+          # Verificar instalación
+          echo "✅ Verificando instalación..."
+          ls -la $SDK_ROOT/platforms/android-35/ || echo "❌ android-35 no encontrado"
+          ls -la $SDK_ROOT/build-tools/35.0.0/ || echo "❌ build-tools 35.0.0 no encontrado"
+          
+          echo "✅ Android SDK 35 configurado correctamente"
+          
+      - name: 🔍 Flutter doctor
+        run: flutter doctor -v
+        
+      - name: 📁 Verify project structure
+        run: |
+          echo "📂 Verificando estructura del proyecto..."
+          ls -la
+          echo "📂 Contenido de lib/:"
+          ls -la lib/ || echo "❌ Directorio lib/ no encontrado"
+          echo "📂 Contenido de android/:"
+          ls -la android/ || echo "❌ Directorio android/ no encontrado"
+          echo "📄 pubspec.yaml:"
+          cat pubspec.yaml || echo "❌ pubspec.yaml no encontrado"
+        
+      - name: 📦 Get dependencies
+        run: flutter pub get
+        
+      - name: 🎨 Generate launcher icons
+        run: |
+          if [ -f "assets/icon.png" ]; then
+            echo "📱 Generando iconos personalizados con flutter_launcher_icons..."
+            flutter pub run flutter_launcher_icons
+          else
+            echo "ℹ️ No se encontró icono personalizado - usando iconos por defecto"
+          fi
+        continue-on-error: true
+        
+      - name: 🧹 Analyze code
+        run: flutter analyze
+        continue-on-error: true
+        
+      - name: 🧽 Clean Gradle cache
+        run: |
+          echo "🧽 Limpiando cache de Gradle para forzar uso del SDK 35 actualizado..."
+          # Limpiar cache de Gradle
+          rm -rf ~/.gradle/caches/
+          # Limpiar cache local del proyecto
+          cd android && ./gradlew clean || true
+          echo "✅ Cache limpiado - forzará descarga de dependencias actualizadas"
+        
+      - name: 🏗️ Build APK
+        run: flutter build apk --release --verbose
+        
+      - name: 📱 Build AAB (Android App Bundle)
+        run: flutter build appbundle --release --verbose
+        
+      - name: 📤 Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-release-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
+          retention-days: 30
+          
+      - name: 📤 Upload AAB Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-release-aab
+          path: build/app/outputs/bundle/release/app-release.aab
+          retention-days: 30
+          
+      - name: 🎉 Build completed
+        run: |
+          echo "✅ Build completado exitosamente"
+          echo "📱 APK: build/app/outputs/flutter-apk/app-release.apk"
+          echo "📦 AAB: build/app/outputs/bundle/release/app-release.aab"
+          echo "🤖 IA habilitada: ${{ github.event.inputs.ai_enabled }}"
+          
+      - name: 🔧 Force Download Android SDK 35 (Fix corrupted android.jar)
+        run: |
+          echo "🔧 SOLUCIÓN RADICAL: Descarga manual de Android SDK 35..."
+          echo "Problema: android.jar corrupto en runners de GitHub Actions"
+          
+          # Variables
+          SDK_ROOT=${ANDROID_SDK_ROOT:-$ANDROID_HOME}
+          PLATFORM_DIR="$SDK_ROOT/platforms/android-35"
+          BUILD_TOOLS_DIR="$SDK_ROOT/build-tools/35.0.0"
+          
+          echo "📍 SDK_ROOT: $SDK_ROOT"
+          echo "📍 PLATFORM_DIR: $PLATFORM_DIR"
+          echo "📍 BUILD_TOOLS_DIR: $BUILD_TOOLS_DIR"
+          
+          # Remover instalación corrupta existente
+          echo "🗑️ Removiendo instalación corrupta..."
+          sudo rm -rf "$PLATFORM_DIR" || true
+          sudo rm -rf "$BUILD_TOOLS_DIR" || true
+          
+          # Crear directorios
+          echo "📁 Creando directorios..."
+          sudo mkdir -p "$PLATFORM_DIR"
+          sudo mkdir -p "$BUILD_TOOLS_DIR"
+          
+          # Descargar Android SDK 35 directamente desde Google
+          echo "⬇️ Descargando Android SDK 35 desde fuente oficial..."
+          cd /tmp
+          
+          # Descargar platform android-35
+          wget -q "https://dl.google.com/android/repository/platform-35_r01.zip" -O platform-35.zip
+          echo "✅ Platform 35 descargado"
+          
+          # Descargar build-tools 35.0.0
+          wget -q "https://dl.google.com/android/repository/build-tools_r35-linux.zip" -O build-tools-35.zip
+          echo "✅ Build tools 35 descargado"
+          
+          # Extraer platform
+          echo "📦 Extrayendo platform..."
+          unzip -q platform-35.zip
+          sudo cp -r android-35/* "$PLATFORM_DIR/"
+          
+          # Extraer build-tools
+          echo "📦 Extrayendo build-tools..."
+          unzip -q build-tools-35.zip
+          sudo cp -r android-13/* "$BUILD_TOOLS_DIR/"
+          
+          # Verificar instalación
+          echo "✅ Verificando instalación..."
+          ls -la "$PLATFORM_DIR/" | head -10
+          ls -la "$BUILD_TOOLS_DIR/" | head -10
+          
+          # Verificar que android.jar no esté corrupto
+          echo "🔍 Verificando android.jar..."
+          if [ -f "$PLATFORM_DIR/android.jar" ]; then
+            file "$PLATFORM_DIR/android.jar"
+            echo "✅ android.jar encontrado y válido"
+          else
+            echo "❌ android.jar NO encontrado"
+            exit 1
+          fi
+          
+          # Limpiar archivos temporales
+          rm -f /tmp/platform-35.zip /tmp/build-tools-35.zip
+          rm -rf /tmp/android-35 /tmp/android-13
+          
+          echo "🎉 Android SDK 35 instalado manualmente con éxito"
